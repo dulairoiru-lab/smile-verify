@@ -34,6 +34,93 @@ def save_config(data: dict) -> None:
 
 verify_config = load_config()  # { "guild_id(str)": role_id(int) }
 
+TICKET_CONFIG_PATH = "ticket_config.json"
+
+
+def load_ticket_config() -> dict:
+    if os.path.exists(TICKET_CONFIG_PATH):
+        try:
+            with open(TICKET_CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def save_ticket_config(data: dict) -> None:
+    with open(TICKET_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+ticket_config = load_ticket_config()  # { "guild_id(str)": next_number(int) }
+
+
+async def create_ticket_channel(interaction: discord.Interaction, ticket_type: str, product_name: str = None):
+    guild = interaction.guild
+    gid = str(guild.id)
+
+    number = ticket_config.get(gid, 1)
+    ticket_config[gid] = number + 1
+    save_ticket_config(ticket_config)
+
+    category = discord.utils.get(guild.categories, name="チケット")
+    if category is None:
+        try:
+            category = await guild.create_category("チケット")
+        except discord.Forbidden:
+            category = None
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+    }
+
+    try:
+        channel = await guild.create_text_channel(
+            name=f"ticket-{number}",
+            category=category,
+            overwrites=overwrites,
+            reason=f"{interaction.user} によるチケット作成",
+        )
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "Botにチャンネルを作成する権限がありません。サーバー設定でBotのロールに「チャンネルの管理」権限を付与してください。",
+            ephemeral=True,
+        )
+        return
+
+    embed = discord.Embed(color=discord.Color.blurple())
+    embed.add_field(name="種類", value=ticket_type, inline=True)
+    embed.add_field(name="作成者", value=interaction.user.mention, inline=True)
+    if product_name:
+        embed.add_field(name="商品名", value=product_name, inline=False)
+
+    await channel.send(content="管理者の対応をお待ちください。", embed=embed)
+    await interaction.response.send_message(f"チケットを作成しました: {channel.mention}", ephemeral=True)
+
+
+class ProductNameModal(discord.ui.Modal, title="ご購入希望チケット"):
+    product_name = discord.ui.TextInput(label="商品名", placeholder="ご希望の商品名を入力してください", max_length=100)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await create_ticket_channel(interaction, "ご購入をご希望な方", product_name=str(self.product_name))
+
+
+class TicketPanelView(discord.ui.View):
+    """チケットパネルのボタン。timeout=None にすることでBot再起動後も機能し続ける(persistent view)。"""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="対応が必要な場合", style=discord.ButtonStyle.secondary, custom_id="ticket_type_support")
+    async def support_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await create_ticket_channel(interaction, "対応が必要な場合")
+
+    @discord.ui.button(label="ご購入をご希望な方", style=discord.ButtonStyle.success, custom_id="ticket_type_purchase")
+    async def purchase_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ProductNameModal())
+
 
 class VerifyView(discord.ui.View):
     """認証ボタン。timeout=None にすることでBot再起動後もボタンが機能し続ける(persistent view)。"""
@@ -81,8 +168,9 @@ class VerifyView(discord.ui.View):
 
 @bot.event
 async def on_ready():
-    # persistent viewとして登録(再起動後もボタンが動作し続けるようにする)
+    # persistent viewとして登録(再起動後もボタンが機能し続けるようにする)
     bot.add_view(VerifyView())
+    bot.add_view(TicketPanelView())
 
     # 各サーバーにスラッシュコマンドを即時反映(グローバル同期は反映まで時間がかかるため)
     for guild in bot.guilds:
@@ -130,6 +218,28 @@ async def verify(interaction: discord.Interaction, role: discord.Role):
 
 @verify.error
 async def verify_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("このコマンドを使う権限がありません(管理者権限が必要です)。", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"エラーが発生しました: {error}", ephemeral=True)
+        raise error
+
+
+@tree.command(name="ticket", description="チケットパネルを設置します")
+@app_commands.checks.has_permissions(administrator=True)
+async def ticket(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="チケット作成",
+        description="ご用件に合わせて、下のボタンからチケットを作成してください。",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(name="対応が必要な場合", value="サポートが必要な場合はこちら", inline=False)
+    embed.add_field(name="ご購入をご希望な方", value="商品のご購入を希望される方はこちら", inline=False)
+    await interaction.response.send_message(embed=embed, view=TicketPanelView())
+
+
+@ticket.error
+async def ticket_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message("このコマンドを使う権限がありません(管理者権限が必要です)。", ephemeral=True)
     else:
