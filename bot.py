@@ -96,6 +96,16 @@ async def on_ready():
     print("------")
 
 
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    # Botが新しいサーバーに参加したときにスラッシュコマンドを即時反映する
+    try:
+        tree.copy_global_to(guild=guild)
+        await tree.sync(guild=guild)
+    except discord.HTTPException:
+        pass
+
+
 @tree.command(name="verify", description="認証用のロールを設定し、認証メッセージを送信します")
 @app_commands.describe(role="認証した人に付与するロール")
 @app_commands.checks.has_permissions(administrator=True)
