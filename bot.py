@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -177,8 +178,10 @@ async def on_ready():
         try:
             tree.copy_global_to(guild=guild)
             await tree.sync(guild=guild)
-        except discord.HTTPException:
-            pass
+            print(f"synced commands to {guild.name} ({guild.id})")
+        except discord.HTTPException as e:
+            print(f"sync failed for {guild.name} ({guild.id}): {e}")
+        await asyncio.sleep(1)  # レート制限を避けるため少し待機
 
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
@@ -190,8 +193,9 @@ async def on_guild_join(guild: discord.Guild):
     try:
         tree.copy_global_to(guild=guild)
         await tree.sync(guild=guild)
-    except discord.HTTPException:
-        pass
+        print(f"synced commands to {guild.name} ({guild.id})")
+    except discord.HTTPException as e:
+        print(f"sync failed for {guild.name} ({guild.id}): {e}")
 
 
 @tree.command(name="verify", description="認証用のロールを設定し、認証メッセージを送信します")
